@@ -44,7 +44,7 @@ typedef struct sbd_dev{
 }Device;
 Device *dev;
 
-void sbd_req(){
+void sbd_req(struct request_queue *q){
 	pr_info("exit\n");
 }
 static struct block_device_operations sdb_fops={
@@ -83,6 +83,7 @@ int sbd_init(void){
 	}
 	dev->gd->major=majornumber;
 	dev->gd->first_minor=0;
+//	dev->gd->minors=16;                  /*0-15 Partition support*/
 	dev->gd->fops=&sdb_fops;
 	dev->gd->private_data=&dev;
 	strcpy(dev->gd->disk_name,"sbd0");
@@ -98,6 +99,11 @@ free:
 }
 
 void sbd_exit(void){
+	del_gendisk(dev->gd);       /*When disk is not longer needed, it should be free*/
+	put_disk(dev->gd);  /*That call will cause the gendisk structure to be freed*/
+	unregister_blkdev(majornumber,DEVICE_NAME);   
+	blk_cleanup_queue(dev->Queue);           /*Queue clean up*/
+	vfree(dev->data);
 	pr_info("%s: Block Device Driver Exited successfully\n",__func__);
 }
 
