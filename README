@@ -1,1 +1,7 @@
-Block Driver 
+Block Driver
+
+1. Compilation :
+   make 
+2. Load module using insmod
+   insmod sbd.ko
+

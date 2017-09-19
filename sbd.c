@@ -10,10 +10,11 @@
 #include <linux/vmalloc.h>  
 
 #include <linux/blkdev.h>
+#include <linux/hdreg.h> /*hd_geometry is defined*/
 
 #define KERNEL_SECTOR_SIZE 512
 #define DEVICE_NAME "sbd"
-#define MINOR 16
+#define MINOR_NO 16
 static int sbd_getgeo(struct block_device *, struct hd_geometry *);
 
 MODULE_LICENSE("Dual BSD/GPL");
@@ -43,13 +44,49 @@ typedef struct sbd_dev{
 	spinlock_t lock;
 }Device;
 Device *dev;
+static void sbd_transfer(Device *dev,sector_t sector,unsigned long nsector,char *buffer,int write){  
+	/*param1: Device, P2: Index of beginning sector P3:No. of sectors ,P4:Buffer P5:Zero:read and Non Zero for Write*/
+	unsigned long offset=sector*logical_block_size;
+	unsigned long nbytes=nsector*logical_block_size;
+	if((offset + nbytes) > dev->size){
+		pr_notice("Beyond-end write (%ld %ld)\n",offset,nbytes);
+		return;
+	}
+	if(write)
+	    memcpy(dev->data + offset,buffer,nbytes);
+	else 
+	    memcpy(buffer,dev->data + offset,nbytes);  /* Read*/
+}
 
 void sbd_req(struct request_queue *q){
+	struct request *req;
+	req=blk_fetch_request(q);    /*,This is combination of blk_peek + blk_start(),There is no more elv_next_request();,After 2.6 Kernel*/
+	while(req!=NULL){
+		if(req==NULL && req->cmd_type!=REQ_TYPE_FS){
+			pr_err("req->cmd_type: is not REQ_TYPE_FS.!\n");
+			__blk_end_request_all(req,-EIO); /*Completely finish req*/
+			continue;
+		}
+		/*blk_rq_pos(): the current sector,blk_rq_cur_sectors(): sectors left in the current segment : blkdev.h rq_data_dir(req):-return non zero for write and 0 for read*/
+		 sbd_transfer(dev, blk_rq_pos(req),blk_rq_cur_sectors(req),req->buffer,rq_data_dir(req)); 
+		if(!__blk_end_request_cur(req,0)){       /*Request to finish the current chunk  0 for success, < 0 for error */
+			req=blk_fetch_request(q);    /*,This is combination of blk_peek + blk_start(),There is no more elv_next_request();,After 2.6 Kernel*/
+		}
+	}
 	pr_info("exit\n");
 }
-static struct block_device_operations sdb_fops={
+static int sbd_getgeo(struct block_device * block_device, struct hd_geometry *geo){
+	long size;
+	size=dev->size * (logical_block_size / KERNEL_SECTOR_SIZE);
+	geo->cylinders = (size & 0x3f) >> 6;     /*No of cylinders i.e (size & ~(111111) ) means lossing first 6 bit info and deviding by 2^6(64)*/
+	geo->heads=4;   /*Four head*/
+	geo->sectors=16;   /*We claim 16 sectors*/
+	geo->start=4;   /*start of data at sector 4*/
+	return 0;
+}
+static struct block_device_operations sdb_fops={                     /*Defined in blkdev.h*/
 	.owner   = THIS_MODULE,
-	.getgeo  =sbd_getgeo;
+	.getgeo  =sbd_getgeo,
 };
 
 int sbd_init(void){
@@ -76,20 +113,20 @@ int sbd_init(void){
 		goto free;
 	}
 	/*Initialised of gendisk structure */
-	dev->gd=alloc_disk(MINOR);
+	dev->gd=alloc_disk(MINOR_NO);
 	if(!dev->gd){
-		pr_err("Gendisk: allocation failed-%s.\n",__LINE__);
-		goto free;
+		pr_err("Gendisk: allocation failed-%d.\n",__LINE__);
+		goto unreg_dev;
 	}
 	dev->gd->major=majornumber;
 	dev->gd->first_minor=0;
-//	dev->gd->minors=16;                  /*0-15 Partition support*/
+	dev->gd->minors=16;                  /*0-15 Partition support*/
 	dev->gd->fops=&sdb_fops;
 	dev->gd->private_data=&dev;
 	strcpy(dev->gd->disk_name,"sbd0");
-	set_capacity(gd,nsector);
+	set_capacity(dev->gd,nsector);
 	dev->gd->queue=dev->Queue;
-	add_disk(gd);
+	add_disk(dev->gd);
 	return 0;
 unreg_dev:
 	unregister_blkdev(majornumber,DEVICE_NAME);
