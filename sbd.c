@@ -72,7 +72,6 @@ void sbd_req(struct request_queue *q){
 			req=blk_fetch_request(q);    /*,This is combination of blk_peek + blk_start(),There is no more elv_next_request();,After 2.6 Kernel*/
 		}
 	}
-	pr_info("exit\n");
 }
 static int sbd_getgeo(struct block_device * block_device, struct hd_geometry *geo){
 	long size;
